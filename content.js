@@ -1005,6 +1005,14 @@
   /**
    * Scroll the activity page to load more items.
    * Returns true if new content appeared.
+   *
+   * Instagram uses IntersectionObserver on a loading sentinel to trigger
+   * lazy-loading. Simple window.scrollTo() often fails to trigger it.
+   * We combine multiple strategies:
+   *   1. Scroll the loading spinner/sentinel into view (most reliable)
+   *   2. Dispatch synthetic wheel events to mimic real user scrolling
+   *   3. Incremental scrolling to give observers time to fire
+   *   4. Fallback: scroll inner containers as well
    */
   async function scrollForMore() {
     const container = getItemsContainer();
@@ -1013,20 +1021,106 @@
     const prevHeight = document.documentElement.scrollHeight;
     const prevItems = container ? container.querySelectorAll('a[href]').length : 0;
 
-    // Scroll the main page
-    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+    // Strategy 1: Find the loading sentinel / spinner and scroll it into view.
+    // Instagram places a small loading indicator at the end of the list.
+    const sentinel = findLoadingSentinel();
+    if (sentinel) {
+      sentinel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      await delay(800);
+    }
 
-    // Also scroll any inner scrollable container
+    // Strategy 2: Incremental scroll – scroll down in steps instead of jumping
+    // to the very bottom. This gives IntersectionObserver time to fire.
+    const scrollEl = scrollTarget && scrollTarget !== document.documentElement
+      ? scrollTarget : document.documentElement;
+    const step = Math.max(300, Math.floor(window.innerHeight * 0.7));
+    for (let i = 0; i < 3; i++) {
+      scrollEl.scrollTop += step;
+      window.scrollBy({ top: step, behavior: 'smooth' });
+      await delay(400);
+    }
+
+    // Strategy 3: Dispatch synthetic wheel events on the scroll container.
+    // Instagram's scroll listeners may rely on wheel events.
+    const wheelTarget = scrollTarget && scrollTarget !== document.documentElement
+      ? scrollTarget : document;
+    for (let i = 0; i < 3; i++) {
+      wheelTarget.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: 300 + Math.random() * 200,
+        bubbles: true,
+        cancelable: true,
+      }));
+      await delay(200);
+    }
+
+    // Also fire a generic scroll event on both window and container
+    window.dispatchEvent(new Event('scroll', { bubbles: true }));
+    if (scrollTarget && scrollTarget !== document.documentElement) {
+      scrollTarget.dispatchEvent(new Event('scroll', { bubbles: true }));
+    }
+
+    // Final push: scroll all the way to the bottom
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
     if (scrollTarget && scrollTarget !== document.documentElement) {
       scrollTarget.scrollTop = scrollTarget.scrollHeight;
     }
 
-    await delay(2500);
+    // Wait for Instagram to render new items
+    await delay(3000);
+
+    // Re-check the sentinel – scroll it into view again if still present
+    const sentinel2 = findLoadingSentinel();
+    if (sentinel2) {
+      sentinel2.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      await delay(1500);
+    }
 
     const newHeight = document.documentElement.scrollHeight;
     const newItems = container ? container.querySelectorAll('a[href]').length : 0;
 
     return newHeight > prevHeight || newItems > prevItems;
+  }
+
+  /**
+   * Find Instagram's loading sentinel / spinner element at the bottom of the list.
+   * This is the element that IntersectionObserver watches to trigger lazy loading.
+   * It's typically an SVG spinner or a small empty div at the end of the content.
+   */
+  function findLoadingSentinel() {
+    // Common patterns for Instagram's loading indicator:
+    // 1. SVG spinner (animated circle)
+    const spinners = document.querySelectorAll('svg[aria-label]');
+    for (const svg of spinners) {
+      if (svg.closest('#instaclean-root')) continue;
+      const label = (svg.getAttribute('aria-label') || '').toLowerCase();
+      if (label.includes('loading') || label.includes('yükleniyor') ||
+          label.includes('cargando') || label.includes('chargement') ||
+          label.includes('laden') || label.includes('caricamento') ||
+          label.includes('carregando') || label.includes('загрузка') ||
+          label.includes('読み込み') || label.includes('加载') || label.includes('로드')) {
+        return svg.closest('div') || svg;
+      }
+    }
+
+    // 2. Any element with "loading" role
+    const loadingEls = document.querySelectorAll('[role="progressbar"], [aria-busy="true"]');
+    for (const el of loadingEls) {
+      if (!el.closest('#instaclean-root') && el.offsetHeight > 0) {
+        return el;
+      }
+    }
+
+    // 3. Small container at the very end of the items container
+    // (Instagram sometimes uses an empty div as sentinel)
+    const container = getItemsContainer();
+    if (container) {
+      const lastChild = container.lastElementChild;
+      if (lastChild && lastChild.offsetHeight < 80 && !lastChild.querySelector('img')) {
+        return lastChild;
+      }
+    }
+
+    return null;
   }
 
   /**
