@@ -342,7 +342,7 @@
           </div>
         </div>
         <div class="ic-footer">
-          <small>DOM-based · No API · No credentials</small>
+          <small>Open-source DOM-based · No API · No credentials</small>
         </div>
       </div>
     `;
