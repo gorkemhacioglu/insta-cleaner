@@ -1,5 +1,8 @@
 # InstaClean – Instagram Activity Cleaner
 
+[See on Chrome Webstore](https://chromewebstore.google.com/detail/instaclean-%E2%80%93-activity-cle/kaachkhcjjieffkmmlmlpcldofpeijcf)
+
+
 A Chrome extension to bulk-remove your likes and comments from Instagram. Open-source pure DOM-based — no API, no cookies, no credentials needed.
 
 ![InstaClean Screenshot](images/screenshot.png)
