@@ -1003,6 +1003,22 @@
   }
 
   /**
+   * Scroll to top of page to ensure Select button is visible.
+   */
+  async function scrollToTop() {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    document.documentElement.scrollTop = 0;
+    const container = getItemsContainer();
+    if (container) {
+      const scrollTarget = findScrollableChild(container);
+      if (scrollTarget && scrollTarget !== document.documentElement) {
+        scrollTarget.scrollTop = 0;
+      }
+    }
+    await delay(800);
+  }
+
+  /**
    * Scroll the activity page to load more items.
    * Returns true if new content appeared.
    *
@@ -1185,47 +1201,154 @@
    * Returns true if an error dialog was found and dismissed.
    */
   async function handleErrorDialog() {
-    const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
-    for (const dialog of dialogs) {
-      if (dialog.closest('#instaclean-root')) continue;
-      const dialogText = dialog.textContent.toLowerCase();
-      // Detect error keywords in any language
-      const errorKeywords = [
-        'bir sorun oluştu',   // Turkish
-        'an error occurred',  // English
-        'something went wrong', // English alt
-        'error',
-        'problem',
-        'try again',
-        'tekrar',             // Turkish "try again"
-        'ha ocurrido un error', // Spanish
-        'une erreur',         // French
-        'ein fehler',         // German
-      ];
-      const isError = errorKeywords.some(kw => dialogText.includes(kw));
-      if (isError) {
-        log(`⚠ Error dialog detected: "${dialog.textContent.substring(0, 100).replace(/\s+/g, ' ')}"`);
-        // Click OK / dismiss button
-        const okBtn = findLocalizedDialogButton('ok') ||
-                      findLocalizedDialogButton('close') ||
-                      findLocalizedDialogButton('done');
-        if (okBtn) {
-          okBtn.click();
-          log('Dismissed error dialog.');
-          await delay(1000);
-          return true;
+    // Try multiple times with short delays - dialog may appear with slight delay
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await delay(500);
+      
+      const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
+      log(`DEBUG handleErrorDialog: Found ${dialogs.length} dialog(s), attempt ${attempt + 1}`);
+      
+      for (const dialog of dialogs) {
+        if (dialog.closest('#instaclean-root')) continue;
+        if (dialog.offsetHeight === 0) continue; // Skip hidden dialogs
+        
+        const dialogText = dialog.textContent.toLowerCase();
+        log(`DEBUG dialog content: "${dialogText.substring(0, 80).replace(/\s+/g, ' ')}"`);
+        
+        // Detect error keywords in any language
+        const errorKeywords = [
+          'bir sorun oluştu',   // Turkish "a problem occurred"
+          'sorun oluştu',       // Turkish shortened
+          'silerken',           // Turkish "while deleting"
+          'tekrar silmeyi',     // Turkish "try deleting again"
+          'an error occurred',  // English
+          'something went wrong', // English alt
+          'error',
+          'problem',
+          'try again',
+          'tekrar',             // Turkish "again"
+          'ha ocurrido un error', // Spanish
+          'une erreur',         // French
+          'ein fehler',         // German
+        ];
+        const isError = errorKeywords.some(kw => dialogText.includes(kw));
+        
+        if (isError) {
+          log(`⚠ Error dialog detected!`);
+          
+          // Find all buttons in the dialog
+          const allButtons = dialog.querySelectorAll('button');
+          log(`DEBUG: Found ${allButtons.length} button(s) in dialog`);
+          
+          // Click the first visible button (should be OK)
+          for (const btn of allButtons) {
+            if (btn.offsetHeight > 0 && btn.offsetWidth > 0) {
+              const btnText = btn.textContent.trim();
+              log(`Clicking button: "${btnText}"`);
+              btn.click();
+              await delay(1000);
+              return true;
+            }
+          }
+          
+          // Try role="button" elements
+          const roleButtons = dialog.querySelectorAll('[role="button"]');
+          for (const btn of roleButtons) {
+            if (btn.offsetHeight > 0 && btn.offsetWidth > 0) {
+              const btnText = btn.textContent.trim();
+              log(`Clicking role=button: "${btnText}"`);
+              btn.click();
+              await delay(1000);
+              return true;
+            }
+          }
+          
+          // Try any clickable element with OK text
+          const allElements = dialog.querySelectorAll('*');
+          for (const el of allElements) {
+            const text = el.textContent.trim().toUpperCase();
+            if ((text === 'OK' || text === 'TAMAM') && el.offsetHeight > 0) {
+              log(`Clicking element with OK text`);
+              el.click();
+              await delay(1000);
+              return true;
+            }
+          }
+          
+          log('Could not find OK button in error dialog');
+          return true; // error detected but couldn't dismiss
         }
-        // Fallback: click any button in the dialog
-        const anyBtn = dialog.querySelector('button, [role="button"]');
-        if (anyBtn) {
-          anyBtn.click();
-          log('Dismissed error dialog (fallback button).');
-          await delay(1000);
-          return true;
-        }
-        return true; // error detected but no button found
       }
     }
+    
+    // Fallback: try broader search if role="dialog" didn't find anything
+    return await dismissAnyErrorPopup();
+  }
+
+  /**
+   * Broader search for error popups that might not have role="dialog".
+   * Searches for error text anywhere in the DOM and clicks the OK button.
+   */
+  async function dismissAnyErrorPopup() {
+    // Search for elements containing error text
+    const errorTexts = [
+      'bir sorun oluştu',
+      'sorun oluştu', 
+      'silerken',
+      'tekrar silmeyi',
+      'an error occurred',
+      'something went wrong',
+    ];
+    
+    // Find all h3, span, div that might contain error text
+    const candidates = document.querySelectorAll('h3, span, div, p');
+    
+    for (const el of candidates) {
+      if (el.closest('#instaclean-root')) continue;
+      if (el.offsetHeight === 0) continue;
+      
+      const text = el.textContent.toLowerCase();
+      const hasError = errorTexts.some(err => text.includes(err));
+      
+      if (hasError) {
+        log(`Found error text in element: "${text.substring(0, 50)}"`);
+        
+        // Find the modal container by walking up the DOM
+        let container = el;
+        for (let i = 0; i < 10; i++) {
+          if (!container.parentElement) break;
+          container = container.parentElement;
+          
+          // Look for OK button within this container
+          const buttons = container.querySelectorAll('button');
+          for (const btn of buttons) {
+            const btnText = btn.textContent.trim().toUpperCase();
+            if ((btnText === 'OK' || btnText === 'TAMAM') && btn.offsetHeight > 0) {
+              log(`Clicking OK button in error popup`);
+              btn.click();
+              await delay(1000);
+              return true;
+            }
+          }
+        }
+        
+        // If no OK button found, try clicking any button near the error
+        const nearbyButtons = document.querySelectorAll('button');
+        for (const btn of nearbyButtons) {
+          if (btn.closest('#instaclean-root')) continue;
+          const btnText = btn.textContent.trim().toUpperCase();
+          if ((btnText === 'OK' || btnText === 'TAMAM') && btn.offsetHeight > 0) {
+            log(`Clicking OK button found in document`);
+            btn.click();
+            await delay(1000);
+            return true;
+          }
+        }
+        
+        return false; // found error but couldn't dismiss
+      }
+    }
+    
     return false;
   }
 
@@ -1544,6 +1667,13 @@
       rounds++;
       log(`─── Round ${rounds} ───`);
 
+      // 0 ─ Check for any lingering error dialogs from previous operations
+      const errorAtStart = await handleErrorDialog();
+      if (errorAtStart) {
+        log('Dismissed lingering error dialog. Continuing…');
+        await delay(2000);
+      }
+
       // Re-check container each round (DOM may have changed after deletion)
       const container = getItemsContainer();
       if (!container) {
@@ -1571,14 +1701,20 @@
           log('Could not find "Select" button after multiple attempts – stopping.');
           break;
         }
-        log(`Could not find "Select" button (attempt ${consecutiveFailures}/3). Scrolling and retrying…`);
-        // The page may have loaded with no items visible – try scrolling
+        log(`Could not find "Select" button (attempt ${consecutiveFailures}/3). Scrolling to top and retrying…`);
+        // The Select button is at the top – scroll up first, then down for more items
+        await scrollToTop();
+        await delay(1000);
         await scrollForMore();
+        await scrollToTop();
         await delay(2000);
         continue;
       }
 
       consecutiveFailures = 0;
+      // Scroll the Select button into view before clicking
+      selectBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      await delay(300);
       log(`Found "Select" button. Clicking…`);
       selectBtn.click();
       await humanDelay(1200, 2000);
@@ -1587,6 +1723,15 @@
       const items = getSelectableItems();
       if (items.length === 0) {
         log('No selectable items found after entering select mode.');
+        
+        // Check if an error dialog is blocking (use broad search)
+        const errorDismissed = await dismissAnyErrorPopup();
+        if (errorDismissed) {
+          log('Error popup was blocking - dismissed it. Retrying round…');
+          await delay(2000);
+          continue;
+        }
+        
         log('Scrolling for more…');
         // Exit select mode first
         const cancelBtn = findLocalizedClickable('deselectAll') ||
@@ -1599,6 +1744,8 @@
           log('No more items to load. All done!');
           break;
         }
+        // Scroll back to top so Select button is visible
+        await scrollToTop();
         continue;
       }
 
@@ -1660,6 +1807,8 @@
           log('No more items to load. All done!');
           break;
         }
+        // Scroll back to top so Select button is visible
+        await scrollToTop();
         continue;
       }
 
@@ -1718,10 +1867,11 @@
       }
 
       // 5b ─ Check for error dialog (Instagram batch limit exceeded)
-      await delay(1000);
+      // Wait a bit longer for error dialog to appear
+      await delay(1500);
       const errorHandled = await handleErrorDialog();
       if (errorHandled) {
-        log(`⚠ Instagram error detected – will retry.`);
+        log(`⚠ Instagram error detected – clicking OK and retrying.`);
         await delay(3000);
         continue;
       }
@@ -1737,6 +1887,9 @@
       // Scroll to load any remaining items
       await scrollForMore();
       await delay(1000);
+
+      // Scroll back to top so Select button is visible for next round
+      await scrollToTop();
     }
 
     if (rounds >= maxRounds) {
